@@ -1,11 +1,17 @@
+const multer = require('multer');
+const fs = require('fs');
+const encryptor = require('file-encryptor');
+const MongoClient = require('mongodb').MongoClient;
+
+
 module.exports = function(app, passport) {
 
 	app.get('/', function(req, res) {
-		res.render('index.ejs');
+		res.render('index.hbs');
 	});
 
 	app.get('/profile', isLoggedIn, function(req, res) {
-		res.render('profile.ejs', {
+		res.render('profile.hbs', {
 			user : req.user
 		});
 	});
@@ -17,7 +23,7 @@ module.exports = function(app, passport) {
 
 
 		app.get('/login', function(req, res) {
-			res.render('login.ejs', { message: req.flash('loginMessage') });
+			res.render('login.hbs', { message: req.flash('loginMessage') });
 		});
 
 		app.post('/login', passport.authenticate('local-login', {
@@ -28,7 +34,7 @@ module.exports = function(app, passport) {
 
 
 		app.get('/signup', function(req, res) {
-			res.render('signup.ejs', { message: req.flash('loginMessage') });
+			res.render('signup.hbs', { message: req.flash('loginMessage') });
 		});
 
 		app.post('/signup', passport.authenticate('local-signup', {
@@ -71,7 +77,7 @@ module.exports = function(app, passport) {
 
 	// locally
 		app.get('/connect/local', function(req, res) {
-			res.render('connect-local.ejs', { message: req.flash('loginMessage') });
+			res.render('connect-local.hbs', { message: req.flash('loginMessage') });
 		});
 		app.post('/connect/local', passport.authenticate('local-signup', {
 			successRedirect : '/profile',
@@ -146,9 +152,117 @@ module.exports = function(app, passport) {
 			res.redirect('/profile');
 		});
 	});
+	
+	app.get('/lib', (req, res) => {
+		res.render('upload.hbs');
+	});
+	
+	app.get('/upload/:collectionName', (req, res) => {
+		res.render('uploads.hbs');
+	});
+
+	app.post('/upload/:collectionName', (req, res) => {
+
+		//    res.render('uploads.hbs');
+
+		var collectionName = req.params.collectionName;
+		console.log(collectionName);
+		var upload = multer({
+			storage: storage,
+			onFileUploadComplete: function (file) {
+				console.log("File Uploaded");
+				console.log(file);
+			}
+
+		}).single('userFile');
+
+		upload(req, res, (err) => {
+			if (!err)
+				res.send('file uploaded');
+			//        console.log(req.file);
+			if (req.file) {
+				encryptor.encryptFile(req.file.path, req.file.path + '.dat', key, function (err) {
+					// Encryption complete.
+					console.log("Encryption Complete");
+					MongoClient.connect('mongodb://localhost:27017/Files', (err, client) => {
+
+						if (err) {
+							return console.log('unable to connect to database');
+						}
+						console.log('connected');
+						var db = client.db('Files');
+						db.collection(collectionName).insertOne({
+							fileName: req.file.originalname,
+							uploadedOn: new Date().toJSON()
+						}, (err, result) => {
+							if (err) return console.log("Unable to insert");
+
+							console.log(JSON.stringify(result.ops, undefined, 2));
+						});
+						client.close();
+					});
+
+
+					fs.unlink(req.file.path, () => {
+						//done
+					});
+
+
+				});
+			}
+		})
+
+
+	});
+
+	app.get('/download/:collectionName', (req, res) => {
+
+		var collectionName = req.params.collectionName;
+		MongoClient.connect('mongodb://localhost:27017/Files', (err, client) => {
+
+			var db = client.db('Files');
+			db.collection(collectionName).find().toArray().then((docs) => {
+				res.send(docs);
+			});
+
+			client.close();
+		});
+	});
+
+	app.get('/download/:collectionName/:tag', (req, res) => {
+		console.log(req.params.tag);
+		var fileTag = req.params.tag;
+		var address = '../node authentication/uploads/';
+		encryptor.decryptFile(address + fileTag + '.dat', address + fileTag, key, () => {
+			//        console.log(decryptFile);
+			var file = address + req.params.tag;
+			res.download(file, () => {
+				fs.unlink(file, () => {
+					//       console.log("file deleted");
+				});
+
+			});
+			console.log("file downloaded");
+			//        res.send("Downloading");
+		});
+	});
+
 
 
 };
+
+var key = 'ac123tx';
+
+var storage = multer.diskStorage({
+
+    destination: function (req, file, callback) {
+        callback(null, './uploads/');
+    },
+
+    filename: function (req, file, callback) {
+        callback(null, file.originalname);
+    }
+});
 
 function isLoggedIn(req, res, next) {
 	if (req.isAuthenticated())
